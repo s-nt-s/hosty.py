@@ -8,6 +8,9 @@ import sys
 import argparse
 import os
 import shutil
+import tempfile
+import py7zr
+from glob import glob
 
 HOSTS_FILE="/etc/hosts"
 DEBUG_FILE="hosts.txt"
@@ -141,27 +144,56 @@ def get_config():
 
 def split_text(text, find=None):
     if find is None:
-        return text.split("\n")
-    return find.findall(text)
-    
+        lns = text.split("\n")
+    else:
+        lns = find.findall(text)
+    for l in lns:
+        l = l.strip()
+        if l:
+            yield l
+
+def read_file(fl):
+    try:
+        with open(fl, "r") as f:
+            return f.read()
+    except UnicodeDecodeError:
+        with open(fl, "rb") as f:
+            return f.read().decode('utf-8','ignore')
 
 def read_url(*args, find=None):
     for url in args:
-        r = requests.get(url)
+        try:
+            r = requests.get(url)
+        except requests.exceptions.SSLError:
+            print ("SSL", url)
+            continue
         print (r.status_code, url)
         if r.status_code != 200:
             continue
-        ct = r.headers.get('content-type')
-        if "text/plain" in ct.lower():
-            for l in split_text(r.text, find=find):
-                l = l.strip()
-                if l:
+        if url.endswith(".7z"):
+            tmp = tempfile.TemporaryDirectory()
+            fl = tmp.name+"/fl.7z"
+            with open(fl, "wb") as f:
+                f.write(r.content)
+            out = tmp.name+"/out"
+            os.mkdir(out)
+            arch = py7zr.SevenZipFile(fl, mode='r')
+            arch.extractall(path=out)
+            arch.close()
+            for fl in sorted(glob(out+"/*")):
+                for l in split_text(read_file(fl), find=find):
+                    yield l
+        elif url.endswith(".zip"):
+            ## TODO
+        else:
+            ct = r.headers.get('content-type')
+            if "text/plain" in ct.lower():
+                for l in split_text(r.text, find=find):
                     yield l
 
 def write_hosts(doms):
     isB = False
     with open(HOSTS_FILE,'r+') as f:
-        #convert to string:
         lines = f.readlines()
         f.seek(0)
         flag = False
