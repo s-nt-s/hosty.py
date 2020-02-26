@@ -256,6 +256,21 @@ def isBlank():
         ln = f.readlines()[-1].strip()
         return ln == ""
 
+def get_original():
+    original=''
+    flag = True
+    with open(HOSTS_FILE, "r") as f:
+        for ln in f.readlines():
+            l = ln.strip()
+            if l in (CONFIG_BEGIN, DOMANINS_BEGIN):
+                flag = False
+                continue
+            if l in (CONFIG_END, DOMANINS_END):
+                flag = True
+                continue
+            if flag:
+                original = original + ln
+    return original
 
 if args.restore:
     write_hosts(ini=DOMANINS_BEGIN, fin=DOMANINS_END)
@@ -288,6 +303,10 @@ cfn.whitelist = set(cfn.whitelist).union((
 for url in cfn.hosts + cfn.rules:
     p = urlparse(url)
     cfn.whitelist.add(p.netloc)
+
+for l in re.findall(r"^\s*\d+\.\d+\.\d+\.\d+\s+(.+)\s*$", get_original(), flags=re.MULTILINE):
+    for i in l.strip().split():
+        cfn.whitelist.add(i)
 
 cfn.blacklist = set(cfn.blacklist) - cfn.whitelist
 
