@@ -1,5 +1,5 @@
 bunch==1.0.1
 py7zr==0.5.2
 PyYAML==5.3
-requests==2.18.4
+requests==2.20.0
 urllib3==1.22
