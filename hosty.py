@@ -17,70 +17,6 @@ from bunch import Bunch
 
 urllib3.disable_warnings()
 
-HOSTS_FILE = "/etc/hosts"
-DEBUG_FILE = "hosts.txt"
-
-parser = argparse.ArgumentParser(description='Ad-blocking by '+HOSTS_FILE)
-parser.add_argument('--restore', action='store_true',
-                    help='Remove ad-blocking config and rules')
-parser.add_argument('--debug', action='store_true',
-                    help="Create local example (hosts.txt) instead overwrite "+HOSTS_FILE)
-parser.add_argument('--off', action='store_true',
-                    help="Deactivate 'HOSTY DOMANINS' section in "+HOSTS_FILE)
-parser.add_argument('--on', action='store_true',
-                    help="Reactive 'HOSTY DOMANINS' section in "+HOSTS_FILE)
-parser.add_argument('--no-verify', action='store_true',
-                    help="No verify SSL")
-parser.add_argument('--ip', default="0.0.0.0", help="IP to redirect (0.0.0.0 by default)")
-args = parser.parse_args()
-
-
-def check_file(fl):
-    if not os.path.isfile(fl):
-        return -3
-    if not os.access(fl, os.R_OK):
-        return -2
-    if not os.access(fl, os.W_OK):
-        return -1
-    return 1
-
-    #print("Changing to debug mode... (result will store in hosts.txt)")
-    args.debug = True
-
-
-def get_text(fl, st):
-    if st == -3:
-        return fl+" doesn't exist"
-    if st == -2:
-        return fl+" can't be read"
-    if st == -1:
-        return fl+" can't be overwritten"
-
-
-is_HOSTS_FILE = check_file(HOSTS_FILE)
-is_DEBUG_FILE = check_file(DEBUG_FILE)
-
-if not args.debug and is_HOSTS_FILE == -1:
-    print(get_text(HOSTS_FILE, is_HOSTS_FILE))
-    print("Changing to debug mode... (result will store in %s)" % DEBUG_FILE)
-    args.debug = True
-if not args.debug and is_HOSTS_FILE not in (-1, 1):
-    sys.exit(get_text(HOSTS_FILE, is_HOSTS_FILE))
-if args.debug and is_DEBUG_FILE != 1:
-    print(get_text(DEBUG_FILE, is_DEBUG_FILE))
-    if is_HOSTS_FILE in (-3, -2):
-        sys.exit("Can't copy from %s to %s" % (HOSTS_FILE, DEBUG_FILE))
-    print("cp %s %s" % (HOSTS_FILE, DEBUG_FILE))
-    shutil.copy(HOSTS_FILE, DEBUG_FILE)
-
-if args.debug:
-    HOSTS_FILE = DEBUG_FILE
-
-CONFIG_BEGIN = "# HOSTY CONFIG BEGIN"
-CONFIG_END = "# HOSTY CONFIG END"
-DOMANINS_BEGIN = "# HOSTY DOMANINS BEGIN"
-DOMANINS_END = "# HOSTY DOMANINS END"
-
 DEFAULT = '''
 # Add ad-blocking hosts files in this array
 hosts:
@@ -112,57 +48,160 @@ blacklist:
 - fake_example_of_whitelist_or_blacklist.com
 '''
 
-re_hosts = re.compile(r"^\s*\d+\.\d+.\d+.\d+\s+([^#\s]+)", re.MULTILINE)
-re_rules = re.compile(r"^\|\|([a-z][a-z0-9\-_.]+\.[a-z]+)\^\s*$", re.MULTILINE)
+
+class MyHosts:
+    HOSTS_FILE = "/etc/hosts"
+    DEBUG_FILE = "hosts.txt"
+    CONFIG_BEGIN = "# HOSTY CONFIG BEGIN"
+    CONFIG_END = "# HOSTY CONFIG END"
+    DOMANINS_BEGIN = "# HOSTY DOMANINS BEGIN"
+    DOMANINS_END = "# HOSTY DOMANINS END"
+    re_hosts = re.compile(r"^\s*\d+\.\d+.\d+.\d+[ \t]+([^#\n]+)", re.MULTILINE)
+    re_rules = re.compile(
+        r"^\|\|([a-z][a-z0-9\-_.]+\.[a-z]+)\^\s*$", re.MULTILINE)
+
+    def __init__(self, fl=None):
+        self.file = (fl or MyHosts.HOSTS_FILE)
+
+    def _get_config(self):
+        yml = None
+        with open(self.file, "r") as f:
+            for l in f.readlines():
+                l = l.strip()
+                if not l.startswith("#"):
+                    continue
+                if l == MyHosts.CONFIG_END:
+                    return "\n".join(yml)
+                if yml is not None:
+                    yml.append(l[1:])
+                elif l == MyHosts.CONFIG_BEGIN:
+                    yml = []
+
+    def _to_bunch(self, yml, check_default=False):
+        yml = yaml.load(yml, Loader=yaml.FullLoader)
+        if check_default:
+            dfl = self._to_bunch(DEFAULT)
+            for k, v in dict(dfl).items():
+                if k in yml:
+                    continue
+                if isinstance(v, list):
+                    yml[k] = []
+                else:
+                    yml[k] = v
+        yml = Bunch(**yml)
+        return yml
+
+    def get_config(self):
+        yml = self._get_config()
+        if yml is not None:
+            return self._to_bunch(yml, check_default=True)
+
+        yml = self._to_bunch(DEFAULT)
+        print("HOSTY CONFIG not found")
+        print("Setting default...")
+        isB = self.isLastBlank()
+        with open(self.file, "a") as f:
+            if not isB:
+                f.write("\n")
+            f.write(MyHosts.CONFIG_BEGIN)
+            for l in DEFAULT.strip().split("\n"):
+                f.write("\n# "+l)
+            f.write("\n"+MyHosts.CONFIG_END+"\n")
+        return yml
+
+    def rewrite(self, ini, fin, *new_lines, rewrite=None):
+        isB = False
+        with open(self.file, 'r+') as f:
+            lines = f.readlines()
+            f.seek(0)
+            flag = False
+            for ln in lines:
+                l = ln.strip()
+                if flag:
+                    if rewrite is not None:
+                        nw = ln if l in (fin, ini) else rewrite(ln)
+                        if not nw.endswith("\n"):
+                            nw = nw + "\n"
+                        f.write(nw)
+                    continue
+                if l in (ini, fin):
+                    flag = (l == ini)
+                    if rewrite is not None:
+                        f.write(ln)
+                    continue
+                f.write(ln)
+                isB = (l == "")
+            if new_lines:
+                if not isB:
+                    f.write("\n")
+                f.write(ini+"\n")
+                for l in new_lines:
+                    f.write(l+"\n")
+                f.write(fin+"\n")
+            f.truncate()
+
+    def isLastBlank(self):
+        with open(self.file, 'r') as f:
+            ln = f.readlines()[-1].strip()
+            return ln == ""
+
+    @property
+    def original(self):
+        original = ''
+        flag = True
+        with open(self.file, "r") as f:
+            for ln in f.readlines():
+                l = ln.strip()
+                if l in (MyHosts.CONFIG_BEGIN, MyHosts.DOMANINS_BEGIN):
+                    flag = False
+                    continue
+                if l in (MyHosts.CONFIG_END, MyHosts.DOMANINS_END):
+                    flag = True
+                    continue
+                if flag:
+                    original = original + ln
+        return original
+
+    @property
+    def original_ips(self):
+        for l in MyHosts.re_hosts.findall(self.original):
+            for i in l.strip().split():
+                yield i
+
+    def restore(self):
+        self.rewrite(MyHosts.DOMANINS_BEGIN, MyHosts.DOMANINS_END)
+        self.rewrite(MyHosts.CONFIG_BEGIN, MyHosts.CONFIG_END)
+
+    def on(self):
+        self.rewrite(MyHosts.DOMANINS_BEGIN, MyHosts.DOMANINS_END,
+                     rewrite=lambda l: l[1:] if l.startswith("#") else l)
+
+    def off(self):
+        self.rewrite(MyHosts.DOMANINS_BEGIN, MyHosts.DOMANINS_END, rewrite=lambda l: l if (
+            l.startswith("#") or not l.strip()) else "#" + l)
+
+    def write_doms(self, ip, *doms):
+        self.rewrite(MyHosts.DOMANINS_BEGIN, MyHosts.DOMANINS_END,
+                     *(ip+" "+d for d in sorted(doms)))
 
 
-def read_config():
-    yml = None
-    with open(HOSTS_FILE, "r") as f:
-        for l in f.readlines():
-            l = l.strip()
-            if not l.startswith("#"):
-                continue
-            if l == CONFIG_END:
-                return "\n".join(yml)
-            if yml is not None:
-                yml.append(l[1:])
-            elif l == CONFIG_BEGIN:
-                yml = []
+def check_file(fl):
+    if not os.path.isfile(fl):
+        return -3
+    if not os.access(fl, os.R_OK):
+        return -2
+    if not os.access(fl, os.W_OK):
+        return -1
+    return 1
 
 
-def to_bunch(yml, check_default=False):
-    yml = yaml.load(yml, Loader=yaml.FullLoader)
-    if check_default:
-        dfl = to_bunch(DEFAULT)
-        for k, v in dict(dfl).items():
-            if k in yml:
-                continue
-            if isinstance(v, list):
-                yml[k] = []
-            else:
-                yml[k] = v
-    yml = Bunch(**yml)
-    return yml
-
-
-def get_config():
-    yml = read_config()
-    if yml is not None:
-        return to_bunch(yml, check_default=True)
-
-    yml = to_bunch(DEFAULT)
-    print("HOSTY CONFIG not found")
-    print("Setting default...")
-    isB = isBlank()
-    with open(HOSTS_FILE, "a") as f:
-        if not isB:
-            f.write("\n")
-        f.write(CONFIG_BEGIN)
-        for l in DEFAULT.strip().split("\n"):
-            f.write("\n# "+l)
-        f.write("\n"+CONFIG_END+"\n")
-    return yml
+def get_text(fl, st):
+    if st == -3:
+        return fl+" doesn't exist"
+    if st == -2:
+        return fl+" can't be read"
+    if st == -1:
+        return fl+" can't be overwritten"
 
 
 def split_text(text, find=None):
@@ -171,9 +210,8 @@ def split_text(text, find=None):
     else:
         lns = find.findall(text)
     for l in lns:
-        l = l.strip()
-        if l:
-            yield l
+        for i in l.strip().split():
+            yield i
 
 
 def read_file(fl):
@@ -219,144 +257,120 @@ def read_url(*urls, find=None):
                     yield l
 
 
-def write_hosts(*new_lines, ini=DOMANINS_BEGIN, fin=DOMANINS_END, rewrite=None):
-    isB = False
-    with open(HOSTS_FILE, 'r+') as f:
-        lines = f.readlines()
-        f.seek(0)
-        flag = False
-        for ln in lines:
-            l = ln.strip()
-            if flag:
-                if rewrite is not None:
-                    nw = ln if l in (fin, ini) else rewrite(ln)
-                    if not nw.endswith("\n"):
-                        nw = nw + "\n"
-                    f.write(nw)
-                continue
-            if l in (ini, fin):
-                flag = (l == ini)
-                if rewrite is not None:
-                    f.write(ln)
-                continue
-            f.write(ln)
-            isB = (l == "")
-        if new_lines:
-            if not isB:
-                f.write("\n")
-            f.write(ini+"\n")
-            for l in new_lines:
-                f.write(l+"\n")
-            f.write(fin+"\n")
-        f.truncate()
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+        description='Ad-blocking by '+MyHosts.HOSTS_FILE)
+    parser.add_argument('--restore', action='store_true',
+                        help='Remove ad-blocking config and rules')
+    parser.add_argument('--debug', action='store_true',
+                        help="Create local example ("+MyHosts.DEBUG_FILE+") instead overwrite "+MyHosts.HOSTS_FILE)
+    parser.add_argument('--off', action='store_true',
+                        help="Deactivate 'HOSTY DOMANINS' section in "+MyHosts.HOSTS_FILE)
+    parser.add_argument('--on', action='store_true',
+                        help="Reactive 'HOSTY DOMANINS' section in "+MyHosts.HOSTS_FILE)
+    parser.add_argument('--no-verify', action='store_true',
+                        help="No verify SSL")
+    parser.add_argument('--ip', default="0.0.0.0",
+                        help="IP to redirect (0.0.0.0 by default)")
+    args = parser.parse_args()
 
+    is_HOSTS_FILE = check_file(MyHosts.HOSTS_FILE)
+    is_DEBUG_FILE = check_file(MyHosts.DEBUG_FILE)
 
-def isBlank():
-    with open(HOSTS_FILE, 'r') as f:
-        ln = f.readlines()[-1].strip()
-        return ln == ""
+    if not args.debug and is_HOSTS_FILE == -1:
+        print(get_text(MyHosts.HOSTS_FILE, is_HOSTS_FILE))
+        print("Changing to debug mode... (result will store in %s)" %
+              MyHosts.DEBUG_FILE)
+        args.debug = True
+    if not args.debug and is_HOSTS_FILE not in (-1, 1):
+        sys.exit(get_text(MyHosts.HOSTS_FILE, is_HOSTS_FILE))
+    if args.debug and is_DEBUG_FILE != 1:
+        print(get_text(MyHosts.DEBUG_FILE, is_DEBUG_FILE))
+        if is_HOSTS_FILE in (-3, -2):
+            sys.exit("Can't copy from %s to %s" %
+                     (MyHosts.HOSTS_FILE, MyHosts.DEBUG_FILE))
+        print("cp %s %s" % (MyHosts.HOSTS_FILE, MyHosts.DEBUG_FILE))
+        shutil.copy(MyHosts.HOSTS_FILE, MyHosts.DEBUG_FILE)
 
-def get_original():
-    original=''
-    flag = True
-    with open(HOSTS_FILE, "r") as f:
-        for ln in f.readlines():
-            l = ln.strip()
-            if l in (CONFIG_BEGIN, DOMANINS_BEGIN):
-                flag = False
-                continue
-            if l in (CONFIG_END, DOMANINS_END):
-                flag = True
-                continue
-            if flag:
-                original = original + ln
-    return original
+    myHosts = MyHosts(MyHosts.DEBUG_FILE if args.debug else MyHosts.HOSTS_FILE)
 
-if args.restore:
-    write_hosts(ini=DOMANINS_BEGIN, fin=DOMANINS_END)
-    write_hosts(ini=CONFIG_BEGIN, fin=CONFIG_END)
-    sys.exit()
+    if args.restore:
+        myHosts.restore()
+        sys.exit()
 
-if args.off:
-    write_hosts(ini=DOMANINS_BEGIN, fin=DOMANINS_END, rewrite=lambda l: l if (
-        l.startswith("#") or not l.strip()) else "#" + l)
-    sys.exit()
+    if args.off:
+        myHosts.off()
+        sys.exit()
 
-if args.on:
-    write_hosts(ini=DOMANINS_BEGIN, fin=DOMANINS_END,
-                rewrite=lambda l: l[1:] if l.startswith("#") else l)
-    sys.exit()
+    if args.on:
+        myHosts.on()
+        sys.exit()
 
-cfn = get_config()
-cfn.whitelist = set(cfn.whitelist).union((
-    "localhost",
-    "localhost.localdomain",
-    "local",
-    "broadcasthost",
-    "ip6-localhost",
-    "ip6-loopback",
-    "ip6-localnet",
-    "ip6-mcastprefix",
-    "ip6-allnodes",
-    "ip6-allrouters"
-))
-for url in cfn.hosts + cfn.rules:
-    p = urlparse(url)
-    cfn.whitelist.add(p.netloc)
+    cfn = myHosts.get_config()
+    cfn.whitelist = set(cfn.whitelist).union(myHosts.original_ips).union((
+        "localhost",
+        "localhost.localdomain",
+        "local",
+        "broadcasthost",
+        "ip6-localhost",
+        "ip6-loopback",
+        "ip6-localnet",
+        "ip6-mcastprefix",
+        "ip6-allnodes",
+        "ip6-allrouters"
+    ))
+    for url in cfn.hosts + cfn.rules:
+        p = urlparse(url)
+        cfn.whitelist.add(p.netloc)
 
-for l in re.findall(r"^\s*\d+\.\d+\.\d+\.\d+\s+(.+)\s*$", get_original(), flags=re.MULTILINE):
-    for i in l.strip().split():
-        cfn.whitelist.add(i)
+    cfn.blacklist = set(cfn.blacklist) - cfn.whitelist
 
-cfn.blacklist = set(cfn.blacklist) - cfn.whitelist
+    rst = {}
 
-rst = {}
+    for url in sorted(cfn.hosts):
+        doms = set(read_url(url, find=MyHosts.re_hosts)) - cfn.whitelist
+        if doms:
+            rst[url] = doms
 
-for url in sorted(cfn.hosts):
-    doms = set(read_url(url, find=re_hosts)) - cfn.whitelist
-    if doms:
-        rst[url] = doms
+    for url in sorted(cfn.rules):
+        doms = set(read_url(url, find=MyHosts.re_rules)) - cfn.whitelist
+        if doms:
+            rst[url] = doms
 
-for url in sorted(cfn.rules):
-    doms = set(read_url(url, find=re_rules)) - cfn.whitelist
-    if doms:
-        rst[url] = doms
+    if cfn.blacklist:
+        rst["blacklist"] = cfn.blacklist
 
-if cfn.blacklist:
-    rst["blacklist"] = cfn.blacklist
+    if not rst:
+        sys.exit("\nDomains not founds. Abort!")
 
-if not rst:
-    sys.exit("\nDomains not founds. Abort!")
+    print("\nDomains founds:\n")
+    doms = set()
+    debu = []
+    rst = sorted(rst.items(), key=lambda kv: (-len(kv[1]), kv[0]))
 
-print("\nDomains founds:\n")
-doms = set()
-debu = []
-rst = sorted(rst.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+    for url, dom in rst:
+        sz = len(doms)
+        doms = doms.union(dom)
+        debu.append((url, len(dom), len(doms)-sz))
 
+    m_tot = max(i[1] for i in debu)
+    m_dif = max(i[2] for i in debu)
+    m_dif = len(str(m_dif))
+    s_dif = "%"+str(m_dif)+"s"
+    line = "%"+str(len(str(m_tot)))+"s %s %s"
 
-for url, dom in rst:
-    sz = len(doms)
-    doms = doms.union(dom)
-    debu.append((url, len(dom), len(doms)-sz))
+    for i, (url, tot, dif) in enumerate(debu):
+        if len(debu) == 1:
+            dif = "/******/"
+        elif i == 0:
+            dif = (" "*(m_dif+3))
+        else:
+            dif = "[+" + (s_dif % dif) + "]"
+        l = line % (tot, dif, url)
+        l = l.replace("/******/ ", "")
+        print(l)
 
-m_tot = max(i[1] for i in debu)
-m_dif = max(i[2] for i in debu)
-m_dif = len(str(m_dif))
-s_dif = "%"+str(m_dif)+"s"
-line = "%"+str(len(str(m_tot)))+"s %s %s"
+    if len(debu) > 1:
+        print("Total:", len(doms))
 
-for i, (url, tot, dif) in enumerate(debu):
-    if len(debu) == 1:
-        dif = "/******/"
-    elif i == 0:
-        dif = (" "*(m_dif+3))
-    else:
-        dif = "[+" + (s_dif % dif) + "]"
-    l = line % (tot, dif, url)
-    l = l.replace("/******/ ", "")
-    print(l)
-
-if len(debu) > 1:
-    print("Total:", len(doms))
-
-write_hosts(*(args.ip+" "+d for d in sorted(doms)))
+    myHosts.write_doms(args.ip, *doms)
