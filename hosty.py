@@ -59,6 +59,7 @@ class MyHosts:
     re_hosts = re.compile(r"^\s*\d+\.\d+.\d+.\d+[ \t]+([^#\n]+)", re.MULTILINE)
     re_rules = re.compile(
         r"^\|\|([a-z][a-z0-9\-_.]+\.[a-z]+)\^\s*$", re.MULTILINE)
+    re_dom = re.compile(r"^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$", re.IGNORECASE)
 
     def __init__(self, fl=None):
         self.file = (fl or MyHosts.HOSTS_FILE)
@@ -163,10 +164,11 @@ class MyHosts:
         return original
 
     @property
-    def original_ips(self):
+    def original_doms(self):
         for l in MyHosts.re_hosts.findall(self.original):
             for i in l.strip().split():
-                yield i
+                if MyHosts.re_dom.match(i):
+                    yield i
 
     def restore(self):
         self.rewrite(MyHosts.DOMANINS_BEGIN, MyHosts.DOMANINS_END)
@@ -203,17 +205,6 @@ def get_text(fl, st):
     if st == -1:
         return fl+" can't be overwritten"
 
-
-def split_text(text, find=None):
-    if find is None:
-        lns = text.split("\n")
-    else:
-        lns = find.findall(text)
-    for l in lns:
-        for i in l.strip().split():
-            yield i
-
-
 def read_file(fl):
     try:
         with open(fl, "r") as f:
@@ -245,17 +236,21 @@ def read_url(*urls, find=None):
             arch.extractall(path=out)
             arch.close()
             for fl in sorted(glob(out+"/*")):
-                for l in split_text(read_file(fl), find=find):
-                    yield l
+                yield read_file(fl)
         elif url.endswith(".zip"):
             # TODO
             pass
         else:
             ct = r.headers.get('content-type')
             if "text/plain" in ct.lower():
-                for l in split_text(r.text, find=find):
-                    yield l
+                yield r.text
 
+def read_doms_from_url(*urls, find):
+    for text in read_url(*urls):
+        for l in find.findall(text):
+            for i in l.strip().split():
+                if MyHosts.re_dom.match(i):
+                    yield i
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
@@ -307,7 +302,7 @@ if __name__ == '__main__':
         sys.exit()
 
     cfn = myHosts.get_config()
-    cfn.whitelist = set(cfn.whitelist).union(myHosts.original_ips).union((
+    cfn.whitelist = set(cfn.whitelist).union(myHosts.original_doms).union((
         "localhost",
         "localhost.localdomain",
         "local",
@@ -325,20 +320,17 @@ if __name__ == '__main__':
 
     cfn.blacklist = set(cfn.blacklist) - cfn.whitelist
 
-    rst = {}
+    rst = {
+        "blacklist":cfn.blacklist
+    }
 
     for url in sorted(cfn.hosts):
-        doms = set(read_url(url, find=MyHosts.re_hosts)) - cfn.whitelist
-        if doms:
-            rst[url] = doms
+        rst[url] = set(read_doms_from_url(url, find=MyHosts.re_hosts)) - cfn.whitelist
 
     for url in sorted(cfn.rules):
-        doms = set(read_url(url, find=MyHosts.re_rules)) - cfn.whitelist
-        if doms:
-            rst[url] = doms
+        rst[url] = set(read_doms_from_url(url, find=MyHosts.re_rules)) - cfn.whitelist
 
-    if cfn.blacklist:
-        rst["blacklist"] = cfn.blacklist
+    rst = {k:v for k,v in rst.items() if v}
 
     if not rst:
         sys.exit("\nDomains not founds. Abort!")
