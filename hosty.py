@@ -183,8 +183,9 @@ class MyHosts:
             l.startswith("#") or not l.strip()) else "#" + l)
 
     def write_doms(self, ip, *doms):
+        doms=sorted(doms, key=lambda x: tuple(reversed(x.split("."))))
         self.rewrite(MyHosts.DOMANINS_BEGIN, MyHosts.DOMANINS_END,
-                     *(ip+" "+d for d in sorted(doms)))
+                     *(ip+" "+d for d in doms))
 
 
 def check_file(fl):
