@@ -251,7 +251,7 @@ def read_doms_from_url(*urls, find):
         for l in find.findall(text):
             for i in l.strip().split():
                 if MyHosts.re_dom.match(i):
-                    yield i
+                    yield i.lower()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
