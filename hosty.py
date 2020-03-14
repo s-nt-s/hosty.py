@@ -74,7 +74,10 @@ class MyHosts:
                 if l == MyHosts.CONFIG_END:
                     return "\n".join(yml)
                 if yml is not None:
-                    yml.append(l[1:])
+                    l_yml = l[1:]
+                    if l_yml.strip().startswith("- *"):
+                        l_yml = l_yml.replace("- *", '- "*')+'"'
+                    yml.append(l_yml)
                 elif l == MyHosts.CONFIG_BEGIN:
                     yml = []
 
@@ -253,6 +256,13 @@ def read_doms_from_url(*urls, find):
                 if MyHosts.re_dom.match(i):
                     yield i.lower()
 
+def cleanSet(st, whitelist, whitelist_wildcard):
+    st = set(st) - whitelist
+    for w in whitelist_wildcard:
+        st = st - set(i for i in st if i.endswith(w))
+    return st
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Ad-blocking by '+MyHosts.HOSTS_FILE)
@@ -319,17 +329,19 @@ if __name__ == '__main__':
         p = urlparse(url)
         cfn.whitelist.add(p.netloc)
 
+    cfn.whitelist_wildcard=set(i[1:] for i in cfn.whitelist if i[0]=="*")
     cfn.blacklist = set(cfn.blacklist) - cfn.whitelist
 
     rst = {
         "blacklist":cfn.blacklist
     }
+    
 
     for url in sorted(cfn.hosts):
-        rst[url] = set(read_doms_from_url(url, find=MyHosts.re_hosts)) - cfn.whitelist
+        rst[url] = cleanSet(read_doms_from_url(url, find=MyHosts.re_hosts), cfn.whitelist, cfn.whitelist_wildcard)
 
     for url in sorted(cfn.rules):
-        rst[url] = set(read_doms_from_url(url, find=MyHosts.re_rules)) - cfn.whitelist
+        rst[url] = cleanSet(read_doms_from_url(url, find=MyHosts.re_rules), cfn.whitelist, cfn.whitelist_wildcard)
 
     rst = {k:v for k,v in rst.items() if v}
 
