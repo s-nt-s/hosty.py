@@ -13,7 +13,7 @@ import py7zr
 import requests
 import urllib3
 import yaml
-from bunch import Bunch
+from munch import Munch
 
 urllib3.disable_warnings()
 
@@ -59,7 +59,8 @@ class MyHosts:
     re_hosts = re.compile(r"^\s*\d+\.\d+.\d+.\d+[ \t]+([^#\n]+)", re.MULTILINE)
     re_rules = re.compile(
         r"^\|\|([a-z][a-z0-9\-_.]+\.[a-z]+)\^\s*$", re.MULTILINE)
-    re_dom = re.compile(r"^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$", re.IGNORECASE)
+    re_dom = re.compile(
+        r"^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$", re.IGNORECASE)
 
     def __init__(self, fl=None):
         self.file = (fl or MyHosts.HOSTS_FILE)
@@ -81,10 +82,10 @@ class MyHosts:
                 elif l == MyHosts.CONFIG_BEGIN:
                     yml = []
 
-    def _to_bunch(self, yml, check_default=False):
+    def _to_munch(self, yml, check_default=False):
         yml = yaml.load(yml, Loader=yaml.FullLoader)
         if check_default:
-            dfl = self._to_bunch(DEFAULT)
+            dfl = self._to_munch(DEFAULT)
             for k, v in dict(dfl).items():
                 if k in yml:
                     continue
@@ -92,15 +93,15 @@ class MyHosts:
                     yml[k] = []
                 else:
                     yml[k] = v
-        yml = Bunch(**yml)
+        yml = Munch.fromDict(yml)
         return yml
 
     def get_config(self):
         yml = self._get_config()
         if yml is not None:
-            return self._to_bunch(yml, check_default=True)
+            return self._to_munch(yml, check_default=True)
 
-        yml = self._to_bunch(DEFAULT)
+        yml = self._to_munch(DEFAULT)
         print("HOSTY CONFIG not found")
         print("Setting default...")
         isB = self.isLastBlank()
@@ -186,7 +187,7 @@ class MyHosts:
             l.startswith("#") or not l.strip()) else "#" + l)
 
     def write_doms(self, ip, *doms):
-        doms=sorted(doms, key=lambda x: tuple(reversed(x.split("."))))
+        doms = sorted(doms, key=lambda x: tuple(reversed(x.split("."))))
         self.rewrite(MyHosts.DOMANINS_BEGIN, MyHosts.DOMANINS_END,
                      *(ip+" "+d for d in doms))
 
@@ -208,6 +209,7 @@ def get_text(fl, st):
         return fl+" can't be read"
     if st == -1:
         return fl+" can't be overwritten"
+
 
 def read_file(fl):
     try:
@@ -249,12 +251,14 @@ def read_url(*urls, find=None):
             if "text/plain" in ct.lower():
                 yield r.text
 
+
 def read_doms_from_url(*urls, find):
     for text in read_url(*urls):
         for l in find.findall(text):
             for i in l.strip().split():
                 if MyHosts.re_dom.match(i):
                     yield i.lower()
+
 
 def cleanSet(st, whitelist, whitelist_wildcard):
     st = set(st) - whitelist
@@ -329,21 +333,22 @@ if __name__ == '__main__':
         p = urlparse(url)
         cfn.whitelist.add(p.netloc)
 
-    cfn.whitelist_wildcard=set(i[1:] for i in cfn.whitelist if i[0]=="*")
+    cfn.whitelist_wildcard = set(i[1:] for i in cfn.whitelist if i[0] == "*")
     cfn.blacklist = set(cfn.blacklist) - cfn.whitelist
 
     rst = {
-        "blacklist":cfn.blacklist
+        "blacklist": cfn.blacklist
     }
-    
 
     for url in sorted(cfn.hosts):
-        rst[url] = cleanSet(read_doms_from_url(url, find=MyHosts.re_hosts), cfn.whitelist, cfn.whitelist_wildcard)
+        rst[url] = cleanSet(read_doms_from_url(
+            url, find=MyHosts.re_hosts), cfn.whitelist, cfn.whitelist_wildcard)
 
     for url in sorted(cfn.rules):
-        rst[url] = cleanSet(read_doms_from_url(url, find=MyHosts.re_rules), cfn.whitelist, cfn.whitelist_wildcard)
+        rst[url] = cleanSet(read_doms_from_url(
+            url, find=MyHosts.re_rules), cfn.whitelist, cfn.whitelist_wildcard)
 
-    rst = {k:v for k,v in rst.items() if v}
+    rst = {k: v for k, v in rst.items() if v}
 
     if not rst:
         sys.exit("\nDomains not founds. Abort!")
