@@ -1,5 +1,5 @@
 munch==2.5.0
 py7zr==0.5.2
-PyYAML==5.4.1
-requests==2.18.4
-urllib3==1.22
+PyYAML==5.4
+requests==2.22.0
+urllib3==1.26.5
